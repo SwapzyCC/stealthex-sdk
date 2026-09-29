@@ -1,0 +1,37 @@
+# stealthex-sdk
+
+> Unofficial, zero-dependency TypeScript client for the StealthEX cryptocurrency exchange API v4 (https://api.stealthex.io). Package name `@swapzy/stealthex-sdk`, installed from GitHub (`npm install github:SwapzyCC/stealthex-sdk`). ESM only; runs on Node 22+, Bun, Deno and edge runtimes; server-side only. Not affiliated with StealthEX.
+
+Key facts for generating code with this SDK:
+
+- Create one client: `new StealthEX({ apiKey })`. The key falls back to the `STEALTHEX_API_KEY` env var.
+- Resources: `rates` (`range`, `estimate`), `currencies` (`list`, `listAll`, `get`, `networks`, `availableRoutes`), `exchanges` (`create`, `get`, `list`, `listAll`, `setTransactionHash`, `waitFor`).
+- Request and response fields are snake_case, exactly as the API sends them (`min_amount`, `rate_id`, `refund_address`, `deposit.expected_amount`).
+- An asset is `{ symbol, network }`; use network `"mainnet"` for a chain's base coin; `currencies.networks()` lists the other network names. Use lowercase symbols (`"btc"`, `"eth"`), as the API does.
+- A fixed-rate exchange needs `rate_id` from a fixed-rate `rates.estimate()`. `estimation: "reversed"` is fixed-rate only. `additional_fee_percent` is floating-rate only.
+- Errors extend `StealthEXError`; API errors are `StealthEXAPIError` with `status`, `kind` (such as `"NoPair"` or `"RateId"`), `details` and `requestId`.
+- `exchanges.create()` is never retried after a 5xx or a network failure, to avoid duplicate exchanges.
+
+## Docs
+
+- [README](https://github.com/SwapzyCC/stealthex-sdk/blob/main/README.md): installation, concepts, recipes, errors, retries, signatures, configuration
+- [Full LLM context](https://raw.githubusercontent.com/SwapzyCC/stealthex-sdk/main/llms-full.txt): the complete public API, every type, and common mistakes, in one file
+
+## Source
+
+- [src/index.ts](https://github.com/SwapzyCC/stealthex-sdk/blob/main/src/index.ts): every public export
+- [src/types.ts](https://github.com/SwapzyCC/stealthex-sdk/blob/main/src/types.ts): request and response types
+- [src/errors.ts](https://github.com/SwapzyCC/stealthex-sdk/blob/main/src/errors.ts): error classes and error kinds
+- [src/signature.ts](https://github.com/SwapzyCC/stealthex-sdk/blob/main/src/signature.ts): `Sx-Signature` verification
+
+## Examples
+
+- [examples/quickstart.ts](https://github.com/SwapzyCC/stealthex-sdk/blob/main/examples/quickstart.ts): networks, a currency, a range and an estimate
+- [examples/floating-swap.ts](https://github.com/SwapzyCC/stealthex-sdk/blob/main/examples/floating-swap.ts): a floating-rate swap, end to end
+- [examples/fixed-rate-swap.ts](https://github.com/SwapzyCC/stealthex-sdk/blob/main/examples/fixed-rate-swap.ts): a fixed rate with reversed estimation, for exact payments
+- [examples/all-currencies.ts](https://github.com/SwapzyCC/stealthex-sdk/blob/main/examples/all-currencies.ts): pagination with `listAll()`
+
+## Optional
+
+- [StealthEX partner program](https://stealthex.io/partners/api/): the upstream service; API keys at https://stealthex.io/pp/
+- [AGENTS.md](https://github.com/SwapzyCC/stealthex-sdk/blob/main/AGENTS.md): conventions for contributing to this repository

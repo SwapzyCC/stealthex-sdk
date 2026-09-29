@@ -1,0 +1,255 @@
+# stealthex-sdk: full context for LLMs and coding assistants
+
+> Unofficial, zero-dependency TypeScript client for the StealthEX cryptocurrency exchange API v4. Not affiliated with StealthEX. This file describes the complete public surface of the SDK, so you can write correct code against it without reading the source.
+
+## Install and import
+
+```sh
+npm install github:SwapzyCC/stealthex-sdk
+```
+
+```ts
+import { StealthEX } from "@swapzy/stealthex-sdk";
+```
+
+- ESM only (`import`, not `require`). Node 22+, Bun, Deno, Cloudflare Workers and other fetch-based runtimes.
+- Server-side only. The API blocks browser origins (CORS) and the API key is secret. Never generate browser code that calls StealthEX directly: proxy through a backend.
+
+## Client
+
+```ts
+const stealthex = new StealthEX({
+  apiKey?: string,                            // default: process.env.STEALTHEX_API_KEY; throws StealthEXError if neither
+  baseUrl?: string,                           // default "https://api.stealthex.io" (paths add /v4/...)
+  fetch?: typeof fetch,                       // default globalThis.fetch
+  timeoutMs?: number,                         // default 30_000, per attempt
+  maxRetries?: number,                        // default 2
+  headers?: Record<string, string>,           // Authorization cannot be overridden
+  signingSecret?: string | readonly string[], // enables Sx-Signature verification
+  requireSignature?: boolean,                 // default false; needs signingSecret
+  signatureToleranceSeconds?: number,         // default 300
+});
+```
+
+Every method takes an optional final `RequestOptions`:
+
+```ts
+interface RequestOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  maxRetries?: number;
+  headers?: Record<string, string>;
+}
+```
+
+`exchanges.waitFor` is the exception: it takes its own `WaitForOptions`.
+
+## Methods
+
+| Method | HTTP | Returns |
+|---|---|---|
+| `rates.range(params: RangeParams, opts?)` | POST /v4/rates/range | `Promise<Range>` |
+| `rates.estimate(params: EstimateParams, opts?)` | POST /v4/rates/estimated-amount | `Promise<Estimate>` |
+| `currencies.list(params?: ListCurrenciesParams, opts?)` | GET /v4/currencies | `Promise<Currency[]>` |
+| `currencies.listAll(params?: ListAllCurrenciesParams, opts?)` | GET /v4/currencies, all pages | `AsyncGenerator<Currency>` |
+| `currencies.get(symbol, network, params?: CurrencyRouteParams, opts?)` | GET /v4/currencies/{symbol}/{network} | `Promise<Currency>` |
+| `currencies.networks(opts?)` | GET /v4/currencies/networks | `Promise<string[]>` |
+| `currencies.availableRoutes(params?: { direction? }, opts?)` | GET /v4/currencies/available-routes | `Promise<AvailableRoute[]>` |
+| `exchanges.create(params: CreateExchangeParams, opts?)` | POST /v4/exchanges | `Promise<Exchange>` |
+| `exchanges.get(id, opts?)` | GET /v4/exchanges/{id} | `Promise<Exchange>` |
+| `exchanges.list(params?: ListExchangesParams, opts?)` | GET /v4/exchanges | `Promise<Exchange[]>` |
+| `exchanges.listAll(params?: ListAllExchangesParams, opts?)` | GET /v4/exchanges, all pages | `AsyncGenerator<Exchange>` |
+| `exchanges.setTransactionHash(id, txHash, opts?)` | PATCH /v4/exchanges/{id} | `Promise<void>` |
+| `exchanges.waitFor(id, options?: WaitForOptions)` | polls GET /v4/exchanges/{id} | `Promise<Exchange>` |
+
+## Types
+
+All fields are snake_case, exactly as on the wire.
+
+```ts
+type RateType = "floating" | "fixed";
+type Estimation = "direct" | "reversed";   // reversed: amount = what the recipient receives. Fixed rate only.
+type Feature = "custom_fee";
+type RouteDirection = "deposit" | "withdrawal";
+type ExchangeStatus =
+  | "waiting" | "confirming" | "exchanging" | "sending" | "verifying"   // in progress
+  | "finished" | "failed" | "refunded" | "expired";                    // terminal
+
+interface Asset { symbol: string; network: string }  // network "mainnet" for a chain's base coin
+interface Route { from: Asset; to: Asset }            // from = what the user sends, to = what they receive
+
+// estimation defaults to "direct" in this SDK.
+type RangeParams =
+  | { route: Route; rate: "floating"; estimation?: "direct"; additional_fee_percent?: number }
+  | { route: Route; rate: "fixed"; estimation?: Estimation };
+type EstimateParams = RangeParams & { amount: number };            // amount > 0
+
+interface Range { min_amount: number; max_amount: number | null }  // null = no upper limit
+interface Estimate {
+  estimated_amount: number;                    // direct: what the user receives; reversed: what they send
+  rate?: { id: string; valid_until: string };  // present for fixed rates; id is the rate_id for create()
+}
+
+interface Currency {
+  symbol: string; network: string; legacy_symbol: string; name: string;
+  rates: RateType[]; features: Feature[]; icon_url: string;
+  precision: number | null;
+  extra_id: string | null;        // name of the memo / destination tag field, or null if none
+  address_regex: string | null;   // a string: new RegExp(address_regex)
+  extra_id_regex: string | null;
+  contract_address: string | null;
+  warnings: { deposit: string[]; withdrawal: string[] };
+  available_routes?: { symbol: string; network: string; rates: RateType[]; features: Feature[] }[];
+}
+
+interface AvailableRoute { from: Asset; to: Asset; rates: RateType[]; features: Feature[] }
+
+interface ListCurrenciesParams {
+  limit?: number;    // 1-250, API default 50
+  offset?: number;
+  network?: string;
+  rate?: RateType;
+  feature?: Feature;
+  include_available_routes?: boolean;           // the SDK sends "true"/"false"
+  available_routes_direction?: RouteDirection;  // API default "withdrawal"
+}
+type ListAllCurrenciesParams = Omit<ListCurrenciesParams, "limit" | "offset"> & { pageSize?: number }; // default 250
+
+type CreateExchangeParams =
+  | { rate: "floating"; estimation?: "direct"; additional_fee_percent?: number; /* + base */ }
+  | { rate: "fixed"; estimation?: Estimation; rate_id: string; /* + base */ };
+// base: { route: Route; amount: number; address: string; extra_id?: string; refund_address?: string; refund_extra_id?: string }
+// address / extra_id: the recipient, on the `to` network. refund_*: on the `from` network.
+
+interface ExchangeLeg {
+  symbol: string; network: string;
+  amount: number;            // actually received (deposit) / sent (withdrawal)
+  expected_amount: number;
+  address: string;           // deposit: where the user sends funds. withdrawal: the recipient.
+  extra_id: string | null;   // deposit.extra_id: the memo the user MUST include with the deposit
+  tx_hash: string | null;
+  address_explorer_url: string | null;
+  tx_explorer_url: string | null;
+}
+
+interface Exchange {
+  id: string; status: ExchangeStatus; rate: RateType;
+  deposit: ExchangeLeg; withdrawal: ExchangeLeg;
+  refund_address: string | null; refund_extra_id: string | null;
+  created_at: string;           // ISO 8601
+  finished_at: string | null;
+  expires_at: string | null;    // fixed rate only
+}
+
+interface ListExchangesParams {
+  limit?: number; offset?: number;
+  created_before?: Date | string; created_after?: Date | string;   // Date becomes toISOString()
+  deposit_address?: string; withdrawal_address?: string;
+  status?: ExchangeStatus | ExchangeStatus[];                       // array becomes comma-separated
+}
+type ListAllExchangesParams = Omit<ListExchangesParams, "limit" | "offset"> & { pageSize?: number };
+
+interface WaitForOptions {
+  until?: readonly ExchangeStatus[] | ((exchange: Exchange) => boolean);  // default TERMINAL_STATUSES
+  intervalMs?: number;   // default 15_000
+  timeoutMs?: number;    // default: none; throws StealthEXTimeoutError
+  signal?: AbortSignal;
+  onUpdate?: (exchange: Exchange, previous: Exchange | undefined) => void;  // first poll + each status change
+}
+```
+
+Other exports: `TERMINAL_STATUSES`, `isTerminalStatus(status)`, `MAX_PAGE_SIZE` (250), `VERSION`, and the signature helpers below.
+
+## Errors
+
+```ts
+class StealthEXError extends Error { requestId: string | undefined }
+class StealthEXAPIError extends StealthEXError {       // any non-2xx response
+  status: number;
+  kind: StealthEXErrorKind | undefined;                 // from { err: { kind, details } }
+  details: string | undefined;
+  body: string;                                         // the raw response body
+}
+class StealthEXAuthenticationError extends StealthEXAPIError {}   // 401, 403
+class StealthEXRateLimitError extends StealthEXAPIError { retryAfterMs: number | undefined }  // 429
+class StealthEXTimeoutError extends StealthEXError {}
+class StealthEXConnectionError extends StealthEXError {}  // no HTTP response; see .cause
+class StealthEXSignatureError extends StealthEXError {}
+```
+
+Documented kinds:
+
+| Status | Kinds |
+|---|---|
+| 401 | `Auth` |
+| 400 | `InvalidAmount`, `RateId`, `ExtraId`, `InvalidData`, `NoUserApiKey`, `RoutesMismatch` |
+| 404 | `NoPair`, `NotFound` |
+| 422 | `NotAllowed`, `NoExchangeRoute`, `RouteIsDisabled`, `MarketUnavailable` |
+
+What each kind means in practice:
+
+- `RateId`: the fixed rate is missing or expired. Estimate again.
+- `InvalidAmount`: the amount is outside `rates.range()`.
+- `ExtraId`: the memo / tag is missing or invalid.
+
+A caller's own `AbortSignal` rejects with the signal's reason, not with a `StealthEXError`.
+
+## Retries
+
+- `429`: retried for every method, including `create`. It waits for `Retry-After`, an HTTP date or seconds, when that is at most 60 s, and throws `StealthEXRateLimitError` otherwise.
+- `5xx`, `408`, timeouts and connection errors: retried for every method **except `exchanges.create()`**, which could otherwise create a duplicate exchange.
+- Other 4xx: never retried.
+- Backoff: full jitter, base 500 ms, cap 8 s.
+- The API rate limit is 600 requests per minute.
+
+## Signatures
+
+```ts
+verifySignature({ header, body, secret, toleranceSeconds?, now? }): Promise<boolean>
+checkSignature(sameInput): Promise<{ valid: true; timestamp: number } | { valid: false; reason: "missing" | "malformed" | "expired" | "mismatch" }>
+computeSignature(secret, timestamp, body): Promise<string>            // hex HMAC-SHA256 of `${timestamp}.${body}`
+parseSignatureHeader(header): { timestamp: number; signatures: string[] } | null
+SIGNATURE_HEADER === "Sx-Signature"
+```
+
+- The header format is `t=<unix seconds>,s0=<hex>[,s0=<hex>...]`.
+- A header can carry several `s0` values while a secret is rolled.
+- `body` must be the raw response text, not re-serialized JSON.
+- Uses Web Crypto; the comparison is constant-time.
+
+## Canonical flows
+
+Floating rate:
+
+```ts
+const route = { from: { symbol: "btc", network: "mainnet" }, to: { symbol: "eth", network: "mainnet" } };
+const { min_amount, max_amount } = await stealthex.rates.range({ route, rate: "floating" });
+const { estimated_amount } = await stealthex.rates.estimate({ route, amount, rate: "floating" });
+const ex = await stealthex.exchanges.create({ route, amount, rate: "floating", address, refund_address });
+// Tell the user: send ex.deposit.expected_amount to ex.deposit.address (+ ex.deposit.extra_id if not null)
+const done = await stealthex.exchanges.waitFor(ex.id, { onUpdate: (e) => log(e.status) });
+```
+
+Fixed rate, exact output:
+
+```ts
+const est = await stealthex.rates.estimate({ route, amount: 1, rate: "fixed", estimation: "reversed" });
+const ex = await stealthex.exchanges.create({
+  route, amount: 1, rate: "fixed", estimation: "reversed",
+  rate_id: est.rate!.id,          // before est.rate.valid_until
+  address, refund_address,
+});
+```
+
+## Common mistakes to avoid
+
+1. The network for base coins is `"mainnet"`, not `"bitcoin"` or `"ethereum"`. Look up token networks with `currencies.networks()` or `currencies.list()` instead of guessing.
+2. The SDK does not convert names: `rate_id`, not `rateId`; `min_amount`, not `minAmount`.
+3. A fixed-rate `create()` without `rate_id` is a type error, and a `RateId` error from the API.
+4. `estimation: "reversed"` and `additional_fee_percent` cannot be combined: the first is fixed-rate only, the second floating-rate only.
+5. `waitFor` resolves on `failed`, `refunded` and `expired` too. Check `status`.
+6. Don't retry `exchanges.create()` blindly after a timeout. Check `exchanges.list({ withdrawal_address })` first.
+7. `address_regex` is a string. Wrap it in `new RegExp()`.
+8. Amounts are JS numbers. Use a decimal library for money arithmetic.
+9. `listAll()` returns an async generator. Use `for await`, or `Array.fromAsync()` on Node 22+.
+10. Never put the API key in client-side code, a URL, or a log line.
